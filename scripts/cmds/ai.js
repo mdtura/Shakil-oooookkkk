@@ -1,55 +1,94 @@
-const axios = require('axios');
+const axios = require("axios");
+
+const baseApiUrl = async () => {
+        const base = await axios.get("https://raw.githubusercontent.com/aura-mahmud/HINATA/main/baseApiUrl.json");
+        return base.data.mahmud;
+};
 
 module.exports = {
-    config: {
-        name: "ai",
-        version: "1.0.0",
-        author: "Shakil",
-        countDown: 5,
-        role: 0,
-        shortDescription: {
-            bn: "AI-er sathey chat korar command"
+        config: {
+                name: "gemma",
+                version: "1.7",
+                author: "MahMUD",
+                countDown: 5,
+                role: 0,
+                description: {
+                        bn: "Gemma AI এর সাথে উন্নতমানের চ্যাট করুন",
+                        en: "Experience high-quality chat with Gemma AI",
+                        vi: "Trải nghiệm trò chuyện chất lượng cao với Gemma AI"
+                },
+                category: "ai",
+                guide: {
+                        bn: '   {pn} <প্রশ্ন>: আপনার প্রশ্নটি লিখুন',
+                        en: '   {pn} <question>: Type your question',
+                        vi: '   {pn} <câu hỏi>: Nhập câu hỏi của bạn'
+                }
         },
-        longDescription: {
-            bn: "Messenger bot theke direct AI-er sathey kotha bolar jonno."
+
+        langs: {
+                bn: {
+                        noInput: "× বেবি, কিছু তো জিজ্ঞাসা করো!",
+                        error: "× সমস্যা হয়েছে: %1। প্রয়োজনে Contact MahMUD|\n•WhatsApp: 01836298139"
+                },
+                en: {
+                        noInput: "× Baby, please ask something!",
+                        error: "× API error: %1. Contact MahMUD for help.\n•WhatsApp: 01836298139"
+                },
+                vi: {
+                        noInput: "× Cưng ơi, hãy hỏi điều gì đó!",
+                        error: "× Lỗi: %1. Liên hệ MahMUD để hỗ trợ.\n•WhatsApp: 01836298139"
+                }
         },
-        category: "AI",
-        guide: {
-            bn: "{pn} [tomar message]"
+
+        onStart: async function ({ api, event, args, message, getLang, commandName }) {
+                const authorName = String.fromCharCode(77, 97, 104, 77, 85, 68);
+                if (this.config.author !== authorName) {
+                        return api.sendMessage("You are not authorized to change the author name.", event.threadID, event.messageID);
+                }
+
+                const prompt = args.join(" ");
+                if (!prompt) return message.reply(getLang("noInput"));
+
+                return module.exports.handleGemma({ api, event, prompt, getLang, commandName });
+        },
+
+        onReply: async function ({ api, event, Reply, getLang, commandName }) {
+                if (Reply.author !== event.senderID) return;
+                const prompt = event.body;
+                if (!prompt) return;
+
+                return module.exports.handleGemma({ api, event, prompt, getLang, commandName });
+        },
+
+        handleGemma: async function ({ api, event, prompt, getLang, commandName }) {
+                try {
+                        api.setMessageReaction("⏳", event.messageID, () => {}, true);
+                        
+                        const baseUrl = await baseApiUrl();                   
+                        const response = await axios.get(`${baseUrl}/api/ai`, {
+                                params: {
+                                        prompt: prompt,
+                                        ai: "gemma"
+                                }
+                        });
+
+                        const replyText = response.data.response || "No response received.";
+                        api.setMessageReaction("✅", event.messageID, () => {}, true);
+
+                        return api.sendMessage(replyText, event.threadID, (error, info) => {
+                                if (!error) {
+                                        global.GoatBot.onReply.set(info.messageID, {
+                                                commandName,
+                                                author: event.senderID
+                                        });
+                                }
+                        }, event.messageID);
+
+                } catch (err) {
+                        console.error("Gemma Error:", err);
+                        api.setMessageReaction("❌", event.messageID, () => {}, true);
+                        const errorMsg = err.response?.data?.error || err.message;
+                        return api.sendMessage(getLang("error", errorMsg), event.threadID, event.messageID);
+                }
         }
-    },
-
-    onStart: async function({ api, event, args }) {
-        const { threadID, messageID } = event;
-        const prompt = args.join(" ");
-
-        if (!prompt) {
-            return api.sendMessage("Kichu toh likhte hobe vai! \nExample: /ai kemon aso?", threadID, messageID);
-        }
-
-        api.sendMessage("Bhabchi... 🧠", threadID, async (err, info) => {
-            try {
-                const apiKey = "AQ.Ab8RN6ICqc0EFXulVImitO8MV0sYSRDnAjSGptjPfl16W4ca6w"; 
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-
-                const response = await axios.post(url, {
-                    system_instruction: {
-                        parts: [{ text: "Tumi amar best friend Shakil-er bot. Amake tui-kari kore banglay informal ar friendly bhabe reply debe." }]
-                    },
-                    contents: [{
-                        parts: [{ text: prompt }]
-                    }]
-                });
-
-                const candidate = response.data.candidates?.[0];
-                const reply = candidate?.content?.parts?.[0]?.text || "Kono উত্তর paoa jayni!";
-
-                api.editMessage(reply, info.messageID);
-
-            } catch (error) {
-                console.error("AI Error:", error.response?.data || error.message);
-                api.editMessage("Dhur! Kothao ekta ghotola haye geche, API key ba network check koro.", info.messageID);
-            }
-        });
-    }
 };
