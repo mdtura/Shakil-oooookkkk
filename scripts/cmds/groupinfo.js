@@ -6,7 +6,7 @@ config: {
     name: "groupinfo",
     aliases: ['boxinfo'],
     version: "1.0",
-    author: "Aryan Chauhan 🍒",
+    author: "Shakil🐸",
     countDown: 0,
     role: 0,
     shortDescription: "See Box info",
