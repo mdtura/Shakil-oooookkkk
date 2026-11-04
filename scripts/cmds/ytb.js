@@ -1,200 +1,131 @@
-axios = require("axios");
-const fs = require("fs");
-
-async function downloadFile(url, fileName) {
-  const response = await axios({
-    url,
-    method: "GET",
-    responseType: "arraybuffer",
-    timeout: 120000
-  });
-  fs.writeFileSync(fileName, Buffer.from(response.data));
-  return fs.createReadStream(fileName);
-}
-
-async function getThumbnailStream(url) {
-  const response = await axios.get(url, {
-    responseType: "stream",
-    timeout: 15000
-  });
-  return response.data;
-}
+const axios = require('axios');
+const fs = require('fs-extra');
+const path = require('path');
 
 module.exports = {
   config: {
-    name: "ytb",
-    version: "3.2",
-    author: "Arafat",
-    role: 0,
-    description: { en: "🎬 YTB Audio/Video Downloader" },
-    category: "media"
+    name: "yt",
+    version: "2.0.0",
+    hasPermission: 0,
+    credits: "Shakil",
+    description: "Search and download YouTube videos using Apify API with full error handling",
+    commandCategory: "media",
+    usages: "[video title / search query]",
+    cooldowns: 5
   },
 
-  onStart: async ({ api, args, event, commandName }) => {
+  onStart: async function ({ api, event, args }) {
+    const { threadID, messageID } = event;
+    const query = args.join(" ");
 
-    if (!args.length)
-      return api.sendMessage(
-        "Usage:\n#ytb -v name\n#ytb -a name\n#ytb -v -l name\n#ytb -a -l name",
-        event.threadID,
-        event.messageID
-      );
+    if (!query) {
+      return api.sendMessage("❌ অনুগ্রহ করে কোনো ইউটিউব ভিডিওর নাম লিখুন!\nউদাহরণ: .yt shape of you", threadID, messageID);
+    }
 
-    const isVideo = args.includes("-v");
-    const isAudio = args.includes("-a");
-    const isList = args.includes("-l");
+    // তোমার Apify API Token
+    const APIFY_TOKEN = process.env.APIFY_TOKEN || "Apify_api_Dywvd3IDunzJKjfKuPIBELrvxP3YQZ0cqWHy";
 
-    if (!isVideo && !isAudio)
-      return api.sendMessage("❌ Use -v (video) or -a (audio)", event.threadID, event.messageID);
-
-    const keyword = args.filter(a => !a.startsWith("-")).join(" ");
-    if (!keyword)
-      return api.sendMessage("Please type a name.", event.threadID, event.messageID);
+    const waitMsg = await api.sendMessage(`🔍 "${query}" খোঁজা হচ্ছে এবং প্রসেস করা হচ্ছে, একটু অপেক্ষা করুন...`, threadID);
 
     try {
-
-      const apiJson = await axios.get(
-        "https://raw.githubusercontent.com/Arafat-Core/cmds/refs/heads/main/api.json"
+      // Step 1: Apify YouTube Scraper Actor কল করা
+      const actorRunResponse = await axios.post(
+        `https://api.apify.com/v2/acts/stream-scraper~youtube-scraper/runs?token=${APIFY_TOKEN}`,
+        {
+          searchKeywords: query,
+          maxResults: 1
+        },
+        { headers: { 'Content-Type': 'application/json' } }
       );
 
-      const DOWNLOAD_BASE = apiJson.data.download;
+      const datasetId = actorRunResponse.data?.data?.defaultDatasetId;
 
-      const searchRes = await axios.get(
-        `https://yt-search-ochre.vercel.app/api/search?q=${encodeURIComponent(keyword)}&limit=6`
+      if (!datasetId) {
+        throw new Error("Apify actor run শুরু করতে ব্যর্থ হয়েছে।");
+      }
+
+      // Step 2: ডেটা প্রসেস হওয়ার জন্য কয়েক সেকেন্ড অপেক্ষা (Polling)
+      await new Promise(resolve => setTimeout(resolve, 6000));
+
+      // Step 3: ডেটাসেট থেকে রেজल्ट ফেচ করা
+      const datasetResponse = await axios.get(
+        `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}`
       );
 
-      if (!searchRes.data.success || !searchRes.data.results.length)
-        return api.sendMessage("❌ No results found.", event.threadID, event.messageID);
+      const videoData = datasetResponse.data?.[0];
 
-      const results = searchRes.data.results.slice(0, 6).map(v => ({
-        id: v.videoId,
-        title: v.title,
-        url: v.url,
-        timestamp: v.duration,
-        author: { name: v.author },
-        thumbnail: v.thumbnail
-      }));
+      if (!videoData || (!videoData.url && !videoData.webpageUrl)) {
+        api.unsendMessage(waitMsg.messageID);
+        return api.sendMessage("❌ এই নামের কোনো ভিডিও পাওয়া যায়নি!", threadID, messageID);
+      }
 
-      if (isList) {
+      const videoUrl = videoData.url || videoData.webpageUrl;
+      const title = videoData.title || query;
+      const downloadUrl = videoData.downloadUrl || videoData.formats?.[0]?.url;
 
-        let text = "╭───────────────❍\n";
-        text += isVideo ? "│   🎬 𝑽𝒊𝒅𝒆𝒐 𝑳𝒊𝒔𝒕\n" : "│   🎵 𝑨𝒖𝒅𝒊𝒐 𝑳𝒊𝒔𝒕\n";
-        text += "╰───────────────❍\n\n";
+      // পুরনো ওয়েটিং মেসেজ রিমুভ করা
+      try { await api.unsendMessage(waitMsg.messageID); } catch (e) {}
 
-        for (let i = 0; i < results.length; i++) {
-          const v = results[i];
-          text += `╭─❍\n`;
-          text += `┊  ${i + 1}. ${v.title}\n`;
-          text += `┊  ⏳ ${v.timestamp}\n`;
-          text += `┊  📺 ${v.author.name}\n`;
-          text += `╰───────────────❍\n\n`;
-        }
+      // Step 4: যদি সরাসরি ডাউনলোডেবল লিংক পাওয়া যায়, তবে ক্যাশ ফোল্ডারে সেভ করে পাঠানো
+      if (downloadUrl) {
+        const cacheDir = path.join(__dirname, 'cache');
+        await fs.ensureDir(cacheDir);
+        const cachePath = path.join(cacheDir, `${Date.now()}_yt.mp4`);
 
-        text += "╭───────────────❍\n";
-        text += "│   🔢 Reply with number (1–6)\n";
-        text += "╰───────────────❍";
+        const videoStream = await axios({
+          method: 'get',
+          url: downloadUrl,
+          responseType: 'stream',
+          timeout: 30000
+        });
 
-        const thumbs = await Promise.all(
-          results.map(v => getThumbnailStream(v.thumbnail))
-        );
+        const writer = fs.createWriteStream(cachePath);
+        videoStream.data.pipe(writer);
 
+        return new Promise((resolve, reject) => {
+          writer.on('finish', async () => {
+            // ফাইলের সাইজ চেক করা (মেসেঞ্জার লিমিটের জন্য, যেমন ২৫ এমবির বেশি হলে শুধু লিংক পাঠাবে)
+            const stats = await fs.stat(cachePath);
+            const fileSizeInMB = stats.size / (1024 * 1024);
+
+            if (fileSizeInMB > 45) {
+              fs.unlinkSync(cachePath);
+              return api.sendMessage(
+                `🎬 **শিরোনাম:** ${title}\n🔗 **ভিডিও লিংক:** ${videoUrl}\n\n⚠️ ভিডিওর সাইজ অনেক বড় (${fileSizeInMB.toFixed(1)}MB) হওয়ায় সরাসরি পাঠানো সম্ভব হলো না, লিংক দেওয়া হলো।`,
+                threadID,
+                messageID
+              );
+            }
+
+            await api.sendMessage({
+              body: `🎬 **${title}**\n\n✅ সফলভাবে ডাউনলোড করা হয়েছে!`,
+              attachment: fs.createReadStream(cachePath)
+            }, threadID, () => {
+              try { fs.unlinkSync(cachePath); } catch (err) {}
+            }, messageID);
+            
+            resolve();
+          });
+
+          writer.on('error', (err) => {
+            try { fs.unlinkSync(cachePath); } catch (e) {}
+            reject(err);
+          });
+        });
+
+      } else {
+        // ডিরেক্ট স্ট্রিম লিংক না থাকলে ইনফো ও ভিডিও লিংক সেন্ড করবে
         return api.sendMessage(
-          { body: text, attachment: thumbs },
-          event.threadID,
-          (err, info) => {
-            global.GoatBot.onReply.set(info.messageID, {
-              commandName,
-              messageID: info.messageID,
-              author: event.senderID,
-              results,
-              isVideo,
-              DOWNLOAD_BASE
-            });
-          },
-          event.messageID
+          `🎬 **শিরোনাম:** ${title}\n🔗 **ভিডিও লিংক:** ${videoUrl}\n\n💡 *Apify থেকে সফলভাবে সার্চ সম্পন্ন হয়েছে!*`,
+          threadID,
+          messageID
         );
       }
 
-      const video = results[0];
-      const shortUrl = `https://youtu.be/${video.id}`;
-
-      const Arafaturl = isVideo
-        ? `${DOWNLOAD_BASE}/arafatdl?url=${encodeURIComponent(shortUrl)}`
-        : `${DOWNLOAD_BASE}/arafatadl?url=${encodeURIComponent(shortUrl)}`;
-
-      const fileName = isVideo ? "video.mp4" : "audio.mp3";
-
-      api.setMessageReaction("🌷", event.messageID, () => {}, true);
-
-      await downloadFile(Arafaturl, fileName);
-
-      api.sendMessage(
-        {
-          body:
-`╭───────────────❍
-│ ${isVideo ? "🎬" : "🎧"} 𝑫𝒐𝒘𝒏𝒍𝒐𝒂𝒅 𝑺𝒖𝒄𝒄𝒆𝒔𝒔
-├───────────────❍
-│ ${isVideo ? "🎥" : "🎵"} ${video.title}
-╰───────────────❍`,
-          attachment: fs.createReadStream(fileName)
-        },
-        event.threadID,
-        () => {
-          fs.unlinkSync(fileName);
-          api.setMessageReaction("🎀", event.messageID, () => {}, true);
-        },
-        event.messageID
-      );
-
-    } catch (err) {
-      console.log("YTB ERROR:", err.message);
-      api.sendMessage("❌ Failed to fetch media.", event.threadID, event.messageID);
-    }
-  },
-
-  onReply: async ({ event, api, Reply }) => {
-    try {
-      const { results, author, isVideo, DOWNLOAD_BASE } = Reply;
-      if (event.senderID !== author) return;
-
-      const choice = parseInt(event.body);
-      if (isNaN(choice) || choice < 1 || choice > results.length)
-        return api.sendMessage("❌ Enter valid number (1–6).", event.threadID, event.messageID);
-
-      const video = results[choice - 1];
-      const shortUrl = `https://youtu.be/${video.id}`;
-
-      const Arafaturl = isVideo
-        ? `${DOWNLOAD_BASE}/arafatdl?url=${encodeURIComponent(shortUrl)}`
-        : `${DOWNLOAD_BASE}/arafatadl?url=${encodeURIComponent(shortUrl)}`;
-
-      const fileName = isVideo ? "video.mp4" : "audio.mp3";
-
-      api.setMessageReaction("🌷", event.messageID, () => {}, true);
-
-      await downloadFile(Arafaturl, fileName);
-
-      await api.unsendMessage(Reply.messageID);
-
-      api.sendMessage(
-        {
-          body:
-`╭───────────────❍
-│ ${isVideo ? "🎬" : "🎧"} 𝑫𝒐𝒘𝒏𝒍𝒐𝒂𝒅 𝑺𝒖𝒄𝒄𝒆𝒔𝒔
-├───────────────❍
-│ ${isVideo ? "🎥" : "🎵"} ${video.title}
-╰───────────────❍`,
-          attachment: fs.createReadStream(fileName)
-        },
-        event.threadID,
-        () => {
-          fs.unlinkSync(fileName);
-          api.setMessageReaction("🎀", event.messageID, () => {}, true);
-        },
-        event.messageID
-      );
-
-    } catch {
-      api.sendMessage("❌ Download failed.", event.threadID, event.messageID);
+    } catch (error) {
+      console.error("YT Command Error:", error);
+      try { await api.unsendMessage(waitMsg.messageID); } catch (e) {}
+      return api.sendMessage(`❌ ভিডিও প্রসেস করতে সমস্যা হয়েছে: ${error.message || "Unknown error"}`, threadID, messageID);
     }
   }
 };
