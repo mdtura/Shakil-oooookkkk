@@ -31,13 +31,13 @@ module.exports = {
                         noInput: "× Baby, please provide a video name or link!",
                         noResult: "× No results found.",
                         success: "✅ 𝙃𝙚𝙧𝙚'𝙨 𝙮𝙤𝙪𝙧 𝙫𝙞𝙙𝙚𝙤 𝙗𝙖𝙗𝙮\n\n• 𝐓𝐢𝐭𝐥𝐞: %1",
-                        error: "× API error: %1. Contact MahMUD for help.\n•WhatsApp: 01836298139"
+                        error: "× API error: %1. Contact Shakil for help."
                 },
                 vi: {
                         noInput: "× Cưng ơi, vui lòng cung cấp tên hoặc liên kết video!",
                         noResult: "× Không tìm thấy kết quả.",
                         success: "✅ Video của cưng đây 😘\n\n• 𝐓𝐢êu đề: %1",
-                        error: "× Lỗi: %1. Liên hệ MahMUD để hỗ trợ.\n•WhatsApp: 01836298139"
+                        error: "× Lỗi: %1. Liên hệ Shakil để hỗ trợ."
                 }
         },
 
@@ -95,7 +95,7 @@ module.exports = {
                         });
 
                 } catch (err) {
-                        console.error("error:", err);
+                        console.error("Video Download Error:", err);
                         api.setMessageReaction("❌", event.messageID, () => {}, true);
                         return message.reply(getLang("error", err.message || "Download failed!"));
                 }
